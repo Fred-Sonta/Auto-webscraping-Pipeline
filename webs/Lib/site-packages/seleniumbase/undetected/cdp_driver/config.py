@@ -1,0 +1,441 @@
+import logging
+import os
+import pathlib
+import secrets
+import sys
+import tempfile
+import zipfile
+from contextlib import suppress
+from seleniumbase.config import settings
+from seleniumbase.drivers import chromium_drivers
+from seleniumbase.fixtures import constants
+from seleniumbase.fixtures import shared_utils
+from typing import Union, List, Optional
+
+__all__ = [
+    "Config",
+    "find_chrome_executable",
+    "temp_profile_dir",
+    "is_root",
+    "is_posix",
+    "PathLike",
+]
+
+logger = logging.getLogger(__name__)
+is_posix = sys.platform.startswith(("darwin", "cygwin", "linux", "linux2"))
+
+PathLike = Union[str, pathlib.Path]
+AUTO = None
+IS_MAC = shared_utils.is_mac()
+IS_LINUX = shared_utils.is_linux()
+IS_WINDOWS = shared_utils.is_windows()
+CHROMIUM_DIR = os.path.dirname(
+    os.path.realpath(chromium_drivers.__file__)
+)
+
+
+class Config:
+    """Config object"""
+
+    def __init__(
+        self,
+        user_data_dir: Optional[PathLike] = AUTO,
+        headless: Optional[bool] = False,
+        incognito: Optional[bool] = False,
+        guest: Optional[bool] = False,
+        browser_executable_path: Optional[PathLike] = AUTO,
+        browser_args: Optional[List[str]] = AUTO,
+        sandbox: Optional[bool] = True,
+        lang: Optional[str] = "en-US",
+        host: str = AUTO,
+        port: int = AUTO,
+        expert: bool = AUTO,
+        proxy: Optional[str] = None,
+        extension_dir: Optional[str] = None,
+        **kwargs: dict,
+    ):
+        """
+        Creates a config object.
+        Can be called without any arguments to generate a best-practice config,
+        which is recommended.
+        Calling the object, eg: myconfig(), returns the list of arguments which
+        are provided to the browser.
+        Additional args can be added using the :py:obj:`~add_argument method`.
+        Instances of this class are usually not instantiated by end users.
+        :param user_data_dir: the data directory to use
+        :param headless: set to True for headless mode
+        :param browser_executable_path:
+         Specify browser executable, instead of using autodetect.
+        :param browser_args: Forwarded to browser executable.
+         Eg: ["--some-chromeparam=somevalue", "some-other-param=someval"]
+        :param sandbox: disables sandbox
+        :param autodiscover_targets: use autodiscovery of targets
+        :param lang:
+         Language string to use other than the default "en-US,en;q=0.9"
+        :param expert: When set to True, "expert" mode is enabled.
+         This adds: --disable-web-security --disable-site-isolation-trials,
+         as well as some scripts and patching useful for debugging.
+         (For example, ensuring shadow-root is always in "open" mode.)
+        :param kwargs:
+        :type user_data_dir: PathLike
+        :type headless: bool
+        :type browser_executable_path: PathLike
+        :type browser_args: list[str]
+        :type sandbox: bool
+        :type lang: str
+        :type kwargs: dict
+        """
+        if not browser_args:
+            browser_args = []
+        if not user_data_dir:
+            self.user_data_dir = temp_profile_dir()
+            self._user_data_dir = self.user_data_dir
+            self._custom_data_dir = False
+        else:
+            self.user_data_dir = user_data_dir
+            profile = os.path.join(self.user_data_dir, "Default")
+            preferences_file = os.path.join(profile, "Preferences")
+            preferences = get_default_preferences()
+            if not os.path.exists(profile):
+                with suppress(Exception):
+                    os.makedirs(profile)
+            with open(preferences_file, "w") as f:
+                f.write(preferences)
+        mock_keychain = False
+        if not browser_executable_path:
+            browser_executable_path = find_chrome_executable()
+        elif browser_executable_path == "_chromium_":
+            from filelock import FileLock
+            binary_folder = None
+            if IS_MAC:
+                binary_folder = "chrome-mac"
+            elif IS_LINUX:
+                binary_folder = "chrome-linux"
+            elif IS_WINDOWS:
+                binary_folder = "chrome-win"
+            binary_location = os.path.join(CHROMIUM_DIR, binary_folder)
+            gui_lock = FileLock(constants.MultiBrowser.DRIVER_FIXING_LOCK)
+            with gui_lock:
+                with suppress(Exception):
+                    shared_utils.make_writable(
+                        constants.MultiBrowser.DRIVER_FIXING_LOCK
+                    )
+                if not os.path.exists(binary_location):
+                    from seleniumbase.console_scripts import sb_install
+                    sys_args = sys.argv  # Save a copy of sys args
+                    sb_install.log_d("\nWarning: Chromium binary not found...")
+                    sb_install.main(override="chromium")
+                    sys.argv = sys_args  # Put back original args
+            binary_name = binary_location.split("/")[-1].split("\\")[-1]
+            if binary_name in ["chrome-mac"]:
+                binary_name = "Chromium"
+                binary_location += "/Chromium.app"
+                binary_location += "/Contents/MacOS/Chromium"
+            elif binary_name == "chrome-linux":
+                binary_name = "chrome"
+                binary_location += "/chrome"
+            elif binary_name in ["chrome-win"]:
+                binary_name = "chrome.exe"
+                binary_location += "\\chrome.exe"
+            if os.path.exists(binary_location):
+                mock_keychain = True
+                browser_executable_path = binary_location
+            else:
+                print(
+                    f"{binary_location} not found. "
+                    f"Defaulting to regular Chrome!"
+                )
+                browser_executable_path = find_chrome_executable()
+        self._browser_args = browser_args
+        self.browser_executable_path = browser_executable_path
+        self.headless = headless
+        self.incognito = incognito
+        self.guest = guest
+        self.sandbox = sandbox
+        self.host = host
+        self.port = port
+        self.expert = expert
+        self.proxy = proxy
+        self.extension_dir = extension_dir
+        self._extensions = []
+        # When using posix-ish operating system and running as root,
+        # you must use no_sandbox=True
+        if is_posix and is_root() and sandbox:
+            logger.info("Detected root usage, auto-disabling sandbox mode.")
+            self.sandbox = False
+        self.autodiscover_targets = True
+        self.lang = lang
+        # Other keyword args will be accessible by attribute
+        self.__dict__.update(kwargs)
+        super().__init__()
+        start_width = settings.CHROME_START_WIDTH
+        start_height = settings.CHROME_START_HEIGHT
+        start_x = settings.WINDOW_START_X
+        start_y = settings.WINDOW_START_Y
+        self._default_browser_args = [
+            "--window-size=%s,%s" % (start_width, start_height),
+            "--window-position=%s,%s" % (start_x, start_y),
+            "--no-first-run",
+            "--no-service-autorun",
+            "--disable-auto-reload",
+            "--no-default-browser-check",
+            "--homepage=about:blank",
+            "--no-pings",
+            "--enable-unsafe-extension-debugging",
+            "--wm-window-animations-disabled",
+            "--animation-duration-scale=0",
+            "--enable-privacy-sandbox-ads-apis",
+            "--safebrowsing-disable-download-protection",
+            '--simulate-outdated-no-au="Tue, 31 Dec 2099 23:59:59 GMT"',
+            "--test-type",
+            "--ash-no-nudges",
+            "--password-store=basic",
+            "--deny-permission-prompts",
+            "--disable-breakpad",
+            "--disable-setuid-sandbox",
+            "--disable-prompt-on-repost",
+            "--disable-application-cache",
+            "--disable-password-generation",
+            "--disable-save-password-bubble",
+            "--disable-single-click-autofill",
+            "--disable-ipc-flooding-protection",
+            "--disable-background-timer-throttling",
+            "--disable-search-engine-choice-screen",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-client-side-phishing-detection",
+            "--disable-device-discovery-notifications",
+            "--disable-top-sites",
+            "--disable-translate",
+            "--dns-prefetch-disable",
+            "--disable-renderer-backgrounding",
+            "--disable-dev-shm-usage",
+        ]
+        if mock_keychain:
+            self._default_browser_args.append("--use-mock-keychain")
+
+    @property
+    def browser_args(self):
+        return sorted(self._default_browser_args + self._browser_args)
+
+    @property
+    def user_data_dir(self):
+        return self._user_data_dir
+
+    @user_data_dir.setter
+    def user_data_dir(self, path: PathLike):
+        self._user_data_dir = str(path)
+        self._custom_data_dir = True
+
+    @property
+    def uses_custom_data_dir(self) -> bool:
+        return self._custom_data_dir
+
+    def add_extension(self, extension_path: PathLike):
+        """
+        Adds an extension to load. You can set the extension_path to a
+        folder (containing the manifest), or an extension zip file (.crx)
+        :param extension_path:
+        """
+        path = pathlib.Path(extension_path)
+        if not path.exists():
+            raise FileNotFoundError(
+                "Could not find anything here: %s" % str(path)
+            )
+        if path.is_file():
+            tf = tempfile.mkdtemp(
+                prefix="extension_", suffix=secrets.token_hex(4)
+            )
+            with zipfile.ZipFile(path, "r") as z:
+                z.extractall(tf)
+                self._extensions.append(tf)
+        elif path.is_dir():
+            for item in path.rglob("manifest.*"):
+                path = item.parent
+            self._extensions.append(path)
+
+    def __call__(self):
+        # The host and port will be added when starting the browser.
+        # By the time it starts, the port is probably already taken.
+        args = self._default_browser_args.copy()
+        args += ["--user-data-dir=%s" % self.user_data_dir]
+        args += [
+            "--disable-features=IsolateOrigins,site-per-process,Translate,"
+            "InsecureDownloadWarnings,DownloadBubble,DownloadBubbleV2,"
+            "OptimizationTargetPrediction,OptimizationGuideModelDownloading,"
+            "SidePanelPinning,UserAgentClientHint,PrivacySandboxSettings4,"
+            "OptimizationHintsFetching,InterestFeedContentSuggestions,"
+            "Bluetooth,WebBluetooth,UnifiedWebBluetooth,ComponentUpdater,"
+            "DisableLoadExtensionCommandLineSwitch,"
+            "WebAuthentication,PasskeyAuth"
+        ]
+        if self.expert:
+            args += [
+                "--disable-web-security",
+                "--disable-site-isolation-trials",
+            ]
+        if self.proxy:
+            args.append("--proxy-server=%s" % self.proxy.split("@")[-1])
+            args.append("--ignore-certificate-errors")
+            args.append("--ignore-ssl-errors=yes")
+        if self.extension_dir:
+            args.append("--load-extension=%s" % self.extension_dir)
+        if self._browser_args:
+            args.extend([arg for arg in self._browser_args if arg not in args])
+        if self.headless:
+            args.append("--headless=new")
+        if self.incognito:
+            args.append("--incognito")
+        if self.guest:
+            args.append("--guest")
+        if not self.sandbox:
+            args.append("--no-sandbox")
+        if self.host:
+            args.append("--remote-debugging-host=%s" % self.host)
+        if self.port:
+            args.append("--remote-debugging-port=%s" % self.port)
+        return args
+
+    def add_argument(self, arg: str):
+        if any(
+            x in arg.lower()
+            for x in [
+                "headless",
+                "data-dir",
+                "data_dir",
+                "no-sandbox",
+                "no_sandbox",
+                "lang",
+            ]
+        ):
+            raise ValueError(
+                '"%s" is not allowed. Please use one of the '
+                'attributes of the Config object to set it.'
+                % arg
+            )
+        self._browser_args.append(arg)
+
+    def __repr__(self):
+        s = f"{self.__class__.__name__}"
+        for k, v in ({**self.__dict__, **self.__class__.__dict__}).items():
+            if k[0] == "_":
+                continue
+            if not v:
+                continue
+            if isinstance(v, property):
+                v = getattr(self, k)
+            if callable(v):
+                continue
+            s += f"\n\t{k} = {v}"
+        return s
+
+
+def is_root():
+    """
+    Helper function to determine if the user is trying to launch chrome
+    under linux as root, which needs some alternative handling.
+    """
+    import ctypes
+    import os
+
+    try:
+        return os.getuid() == 0
+    except AttributeError:
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+
+
+def get_default_preferences():
+    return (
+        """{"credentials_enable_service": false,
+        "password_manager_enabled": false,
+        "password_manager_leak_detection": false}"""
+    )
+
+
+def temp_profile_dir():
+    """Generate a temp dir (path)"""
+    path = os.path.normpath(tempfile.mkdtemp(prefix="uc_"))
+    profile = os.path.join(path, "Default")
+    preferences_file = os.path.join(profile, "Preferences")
+    preferences = get_default_preferences()
+    if not os.path.exists(profile):
+        with suppress(Exception):
+            os.makedirs(profile)
+    with open(preferences_file, "w") as f:
+        f.write(preferences)
+    return path
+
+
+def find_chrome_executable(return_all=False):
+    """
+    Finds the chrome, beta, canary, chromium executable
+    and returns the disk path.
+    """
+    candidates = []
+    if is_posix:
+        for item in os.environ.get("PATH").split(os.pathsep):
+            for subitem in (
+                "google-chrome",
+                "google-chrome-stable",
+                "google-chrome-beta",
+                "google-chrome-dev",
+                "google-chrome-unstable",
+                "chrome",
+                "chromium",
+                "chromium-browser",
+            ):
+                candidates.append(os.sep.join((item, subitem)))
+        if "darwin" in sys.platform:
+            candidates += [
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            ]
+    else:
+        for item in map(
+            os.environ.get,
+            (
+                "PROGRAMFILES",
+                "PROGRAMFILES(X86)",
+                "LOCALAPPDATA",
+                "PROGRAMW6432",
+            ),
+        ):
+            if item is not None:
+                for subitem in (
+                    "Google/Chrome/Application",
+                    "Google/Chrome Beta/Application",
+                    "Google/Chrome Canary/Application",
+                ):
+                    candidates.append(
+                        os.sep.join((item, subitem, "chrome.exe"))
+                    )
+    rv = []
+    for candidate in candidates:
+        if (
+            os.path.exists(candidate)
+            and os.access(candidate, os.R_OK)
+            and os.access(candidate, os.X_OK)
+        ):
+            logger.debug("%s is a valid candidate... " % candidate)
+            rv.append(candidate)
+        else:
+            logger.debug(
+                "%s is not a valid candidate because it doesn't exist "
+                "or isn't an executable."
+                % candidate
+            )
+    winner = None
+    if return_all and rv:
+        return rv
+    if rv and len(rv) > 1:
+        # Assuming the shortest path wins
+        winner = min(rv, key=lambda x: len(x))
+    elif len(rv) == 1:
+        winner = rv[0]
+    if winner:
+        return os.path.normpath(winner)
+    raise FileNotFoundError(
+        "Could not find a valid chrome browser binary. "
+        "Please make sure Chrome is installed. "
+        "Or use the keyword argument: "
+        "'browser_executable_path=/path/to/your/browser'."
+    )
