@@ -1,21 +1,17 @@
-# Observatoire du Marché de l'Emploi à Abidjan
+# Observatoire du MarchÃ© de l'Emploi Ã  Abidjan
 
-Projet de fin de module — Web Scraping | ENSEA AS Data Science
+Projet de fin de module â€” Web Scraping | ENSEA AS Data Science
 
-## Membres
-- [Ton prénom NOM] — Data Engineer / Backend
-- [Prénom NOM partenaire] — DevOps / Monitoring
-
-## Niveau visé : OR (20/20)
+## Niveau visÃ© : OR (20/20)
 
 ## Description
 Pipeline complet de collecte, nettoyage, stockage et visualisation
-des offres d'emploi publiées sur emploi.ci.
+des offres d'emploi publiÃ©es sur emploi.ci.
 
 ## Technologies
 - Scraping : Selenium + undetected-chromedriver
 - API : Flask + Swagger
-- Base de données : PostgreSQL + SQLAlchemy
+- Base de donnÃ©es : PostgreSQL + SQLAlchemy
 - Async : Celery + Redis + Celery Beat
 - Monitoring : Prometheus + Grafana
 - Tests : pytest
@@ -25,4 +21,4 @@ des offres d'emploi publiées sur emploi.ci.
 Voir docs/INSTALLATION.md
 
 ## Statut
-En cours de développement
+En cours de dÃ©veloppement
