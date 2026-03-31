@@ -4,16 +4,16 @@ from sqlalchemy import or_
 from db.database import SessionLocal
 from db.models import Offre, Entreprise
 from api.schemas import get_models
+from tasks.tasks import run_scraping_pipeline
 
-# Création du "Namespace" (un groupe de routes) pour Swagger
-api_namespace = Namespace('data', description='Opérations sur le marché de l\'emploi')
+api_namespace = Namespace('data', description='Opérations sur le marché de l\'emploi Remote')
 
 # --- Configuration des paramètres d'URL pour la recherche ---
 pagination_parser = api_namespace.parser()
 pagination_parser.add_argument('page', type=int, required=False, default=1, help='Numéro de la page')
 pagination_parser.add_argument('limit', type=int, required=False, default=10, help='Nombre d\'éléments par page')
-pagination_parser.add_argument('query', type=str, required=False, help='Recherche par mot clé (Titre ou Description)')
-pagination_parser.add_argument('ville', type=str, required=False, help='Filtrer par ville')
+pagination_parser.add_argument('query', type=str, required=False, help='Recherche (Titre, Tags ou Entreprise)')
+pagination_parser.add_argument('region', type=str, required=False, help='Filtrer par région (ex: Anywhere, EMEA)')
 pagination_parser.add_argument('contrat', type=str, required=False, help='Filtrer par type de contrat')
 
 def register_routes(api):
@@ -26,14 +26,14 @@ def register_routes(api):
         @api_namespace.marshal_with(paginated_offres)
         def get(self):
             """
-            Récupérer la liste des offres d'emploi.
-            Supporte la pagination et les filtres de recherche (Critère Argent).
+            Récupérer la liste des offres d'emploi internationales.
+            Supporte la pagination et les filtres de recherche.
             """
             args = pagination_parser.parse_args()
             page = args.get('page', 1)
             limit = args.get('limit', 10)
             search_query = args.get('query')
-            ville_filter = args.get('ville')
+            region_filter = args.get('region')
             contrat_filter = args.get('contrat')
 
             db = SessionLocal()
@@ -42,14 +42,16 @@ def register_routes(api):
 
                 # Application des filtres dynamiques
                 if search_query:
-                    query = query.filter(
+                    # Jointure pour chercher aussi dans le nom de l'entreprise
+                    query = query.join(Entreprise).filter(
                         or_(
                             Offre.titre_poste.ilike(f'%{search_query}%'),
-                            Offre.description_brute.ilike(f'%{search_query}%')
+                            Offre.tags.ilike(f'%{search_query}%'),
+                            Entreprise.nom.ilike(f'%{search_query}%')
                         )
                     )
-                if ville_filter:
-                    query = query.filter(Offre.ville.ilike(f'%{ville_filter}%'))
+                if region_filter:
+                    query = query.filter(Offre.region.ilike(f'%{region_filter}%'))
                 if contrat_filter:
                     query = query.filter(Offre.type_contrat.ilike(f'%{contrat_filter}%'))
 
@@ -88,16 +90,17 @@ def register_routes(api):
     class ScrapeTrigger(Resource):
         def post(self):
             """
-            Déclencher une nouvelle collecte de données en arrière-plan.
-            (Sera connecté à Celery dans la phase suivante)
+            Déclencher une nouvelle collecte ultra-rapide sur WWR en arrière-plan.
             """
-            # Placeholder : Ce code sera remplacé par l'appel à Celery
+            task = run_scraping_pipeline.delay()
+            
             return {
                 "status": "accepté",
-                "message": "La tâche de scraping a été placée en file d'attente (Simulation).",
-                "task_id": "temp-id-1234"
+                "message": "La tâche d'actualisation WWR est en cours de traitement.",
+                "task_id": task.id
             }, 202
 
     # Attacher le namespace à l'API principale
     api.add_namespace(api_namespace, path='/api/v1')
+
     

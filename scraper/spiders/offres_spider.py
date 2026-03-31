@@ -1,113 +1,95 @@
-import time
-import json
-import random
-import logging
+import requests
 from bs4 import BeautifulSoup
+import json
+import logging
+import re
 
 logger = logging.getLogger(__name__)
 
-def scrapper_offres_direct(driver, url_base, limite=150):
+def scrapper_offres_direct(limite=500):
+    url_cible = "https://weworkremotely.com/categories/all-other-remote-jobs"
     donnees_offres = []
-    page_actuelle = url_base
+    headers = {"User-Agent": "Mozilla/5.0 (ENSEA Educational Project - Observatoire Emploi Remote)"}
 
-    logger.info(f"Début de l'extraction directe (Objectif : {limite} offres)")
+    logger.info(f"Début de l'extraction sur {url_cible}")
 
-    while page_actuelle and len(donnees_offres) < limite:
-        try:
-            logger.info(f"Scraping de la page : {page_actuelle}")
-            driver.uc_open_with_reconnect(page_actuelle, reconnect_time=4)
-            time.sleep(random.uniform(3, 5)) # Pause pour simuler un humain
+    try:
+        response = requests.get(url_cible, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Ciblage des balises <li> (en excluant les séparateurs)
+        jobs = soup.select('section.jobs ul li:not(.view-all):not(.feature-breaker)')
 
-            soup = BeautifulSoup(driver.page_source, 'html.parser')
-            # Ciblage exact du bloc parent que tu as identifié
-            cartes = soup.find_all('div', class_='card-job-detail')
-
-            if not cartes:
-                logger.warning("Aucune carte d'offre trouvée sur cette page.")
+        for job in jobs:
+            if len(donnees_offres) >= limite:
                 break
 
-            for card in cartes:
-                if len(donnees_offres) >= limite:
-                    break
+            # 1. URL et ID
+            a_tag = job.find('a', class_='listing-link--unlocked')
+            if not a_tag:
+                # WWR a parfois des classes différentes pour les liens non sponsorisés
+                a_tag = job.find('a', recursive=False) 
+                if not a_tag: continue
+            
+            link = "https://weworkremotely.com" + a_tag.get('href', '')
+            id_offre = link.split('-')[-1]
 
-                offre = {}
+            # 2. Titre et Entreprise
+            title_tag = job.select_one('.new-listing__header__title__text')
+            title = title_tag.text.strip() if title_tag else "Non renseigné"
+            
+            company_tag = job.find('p', class_='new-listing__company-name')
+            company = company_tag.text.strip() if company_tag else "Confidentiel"
 
-                # 1. Titre, ID et URL
-                title_tag = card.find('h3')
-                if title_tag and title_tag.find('a'):
-                    a_tag = title_tag.find('a')
-                    offre['titre_poste'] = a_tag.get_text(strip=True)
-                    url_offre = a_tag.get('href', '')
-                    # Reconstitution de l'URL absolue
-                    offre['url'] = "https://www.emploi.ci" + url_offre if url_offre.startswith('/') else url_offre
-                    offre['id_emploi_ci'] = url_offre.split('-')[-1].replace('.html', '')
+            # 3. Extraction du Logo (Regex sur le background-image)
+            logo_div = job.find('div', class_='tooltip--flag-logo__flag-logo')
+            logo_url = ""
+            if logo_div and 'style' in logo_div.attrs:
+                match = re.search(r'url\((.*?)\)', logo_div['style'])
+                if match:
+                    logo_url = match.group(1)
+
+            # 4. Tri intelligent des Catégories (Région, Salaire, Contrat, Tags)
+            categories = job.find_all('p', class_='new-listing__categories__category')
+            cat_texts = [c.text.strip() for c in categories if c.text.strip()]
+
+            salaire = "Non renseigné"
+            region = "Anywhere"
+            type_contrat = "Non renseigné"
+            tags = []
+
+            for text in cat_texts:
+                if '$' in text or '€' in text or '£' in text:
+                    salaire = text
+                elif text.lower() in ['full-time', 'contract', 'part-time', 'freelance']:
+                    type_contrat = text
+                elif 'anywhere' in text.lower() or 'only' in text.lower() or 'emea' in text.lower():
+                    region = text
                 else:
-                    continue # On ignore si la structure est anormale
+                    tags.append(text)
 
-                # 2. Entreprise
-                company_tag = card.find('a', class_='company-name')
-                offre['nom_entreprise'] = company_tag.get_text(strip=True) if company_tag else "Confidentiel"
+            # 5. Date
+            date_span = job.select_one('.new-listing__header__icons__date span')
+            date_pub = date_span.text.strip() if date_span else "Récent"
 
-                # 3. Initialisation des champs par défaut
-                offre['niveau_etude_requis'] = "Non renseigné"
-                offre['experience_requise'] = "Non renseigné"
-                offre['type_contrat'] = "Non renseigné"
-                offre['ville'] = "Non renseigné"
-                offre['competences_cles'] = "Non renseigné"
+            donnees_offres.append({
+                "id_externe": id_offre,
+                "url": link,
+                "titre_poste": title,
+                "nom_entreprise": company,
+                "region": region,
+                "type_contrat": type_contrat,
+                "salaire": salaire,
+                "tags": ", ".join(tags) if tags else "Aucun",
+                "logo_url": logo_url,
+                "date_publication": date_pub
+            })
 
-                # 4. Extraction dynamique depuis les balises <li> et <strong>
-                ul_tag = card.find('ul')
-                if ul_tag:
-                    for li in ul_tag.find_all('li'):
-                        texte_li = li.get_text().lower()
-                        strong_tag = li.find('strong')
-                        # On prend le texte en gras s'il existe, sinon on nettoie la ligne
-                        valeur = strong_tag.get_text(strip=True) if strong_tag else li.get_text(strip=True).split(':')[-1].strip()
+    except Exception as e:
+        logger.error(f"Erreur lors du scraping : {e}")
 
-                        if "études" in texte_li or "etude" in texte_li:
-                            offre['niveau_etude_requis'] = valeur
-                        elif "expérience" in texte_li or "experience" in texte_li:
-                            offre['experience_requise'] = valeur
-                        elif "contrat" in texte_li:
-                            offre['type_contrat'] = valeur
-                        elif "région" in texte_li or "region" in texte_li:
-                            offre['ville'] = valeur
-                        elif "compétences" in texte_li or "competence" in texte_li:
-                            offre['competences_cles'] = valeur
-
-                # 5. Description brute (le premier <p> dans la div de description)
-                desc_tag = card.find('div', class_='card-job-description')
-                if desc_tag:
-                    p_tag = desc_tag.find('p')
-                    offre['description_brute'] = p_tag.get_text(strip=True) if p_tag else desc_tag.get_text(strip=True)
-                else:
-                    offre['description_brute'] = "Non renseigné"
-
-                # 6. Date de publication
-                time_tag = card.find('time')
-                offre['date_publication'] = time_tag.get('datetime', "Non renseigné") if time_tag else "Non renseigné"
-
-                donnees_offres.append(offre)
-
-            logger.info(f"Progression : {len(donnees_offres)}/{limite} offres extraites.")
-
-            # Gestion de la pagination (Ciblage du bouton suivant)
-            bouton_suivant = soup.find('li', class_='pagination-next')
-            if bouton_suivant and bouton_suivant.find('a'):
-                href = bouton_suivant.find('a').get('href')
-                page_actuelle = href if href.startswith('http') else "https://www.emploi.ci" + href
-            else:
-                logger.info("Dernière page de pagination atteinte.")
-                page_actuelle = None
-
-        except Exception as e:
-            logger.error(f"Erreur sur la page {page_actuelle} : {e}")
-            break
-
-    # Sauvegarde du JSON final
     with open('scraper/raw_data/donnees_brutes.json', 'w', encoding='utf-8') as f:
         json.dump(donnees_offres, f, ensure_ascii=False, indent=4)
 
-    logger.info(f"Pipeline terminé. {len(donnees_offres)} offres ont été sauvegardées avec succès.")
+    logger.info(f"Succès : {len(donnees_offres)} offres WWR extraites.")
     return donnees_offres
-

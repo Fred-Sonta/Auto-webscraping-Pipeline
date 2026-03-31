@@ -1,0 +1,22 @@
+# 1. Environnement virtuel (C'est lui qui pèse 600MB)
+webs.env/
+venv/
+env/
+
+# 2. Git et IDE
+.git/
+.vscode/
+.idea/
+
+# 3. Cache Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 4. Sécurité (Ne jamais figer les mots de passe dans l'image Docker)
+.env
+
+# 5. Données brutes locales (Docker utilisera son propre volume)
+scraper/raw_data/
+*.log
+

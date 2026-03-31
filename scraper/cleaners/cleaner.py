@@ -19,9 +19,13 @@ def clean_and_load_data(filepath='scraper/raw_data/donnees_brutes.json'):
         
         df = pd.DataFrame(data)
         logger.info(f"Fichier JSON chargé : {len(df)} lignes.")
+
+        if df.empty:
+            logger.warning("Le DataFrame est vide. Aucune donnée à insérer. Arrêt de l'ETL.")
+            return
         
         # Suppression des doublons stricts basés sur l'ID du site
-        df = df.drop_duplicates(subset=['id_emploi_ci'])
+        df = df.drop_duplicates(subset=['id_externe'])
         
         # Nettoyage des espaces superflus
         df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
@@ -59,21 +63,19 @@ def clean_and_load_data(filepath='scraper/raw_data/donnees_brutes.json'):
         offres_ignorees = 0
         
         for _, row in df.iterrows():
-            # Vérifier si l'offre existe déjà (pour éviter les doublons lors des futures exécutions Celery)
-            existe_deja = db.query(Offre).filter(Offre.id_emploi_ci == row['id_emploi_ci']).first()
+            existe_deja = db.query(Offre).filter(Offre.id_externe == row['id_externe']).first()
             
             if not existe_deja:
                 nouvelle_offre = Offre(
-                    id_emploi_ci=row['id_emploi_ci'],
+                    id_externe=row['id_externe'],
                     url=row['url'],
                     titre_poste=row['titre_poste'],
                     entreprise_id=entreprise_id_map[row['nom_entreprise']],
-                    ville=row['ville'],
+                    region=row['region'],
                     type_contrat=row['type_contrat'],
-                    niveau_etude_requis=row['niveau_etude_requis'],
-                    experience_requise=row['experience_requise'],
-                    competences_cles=row['competences_cles'],
-                    description_brute=row['description_brute'],
+                    salaire=row['salaire'],
+                    tags=row['tags'],
+                    logo_url=row['logo_url'],
                     date_publication=row['date_publication']
                 )
                 db.add(nouvelle_offre)

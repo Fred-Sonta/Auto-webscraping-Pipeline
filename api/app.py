@@ -3,6 +3,7 @@ from flask_restx import Api
 from flask_cors import CORS
 from api.routes import register_routes
 import logging
+from db.database import engine, Base
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -25,6 +26,7 @@ def create_app():
 
     # Initialisation des routes
     register_routes(api)
+    Base.metadata.create_all(bind=engine)
 
     return app
 
