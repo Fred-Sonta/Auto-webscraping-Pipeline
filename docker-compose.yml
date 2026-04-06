@@ -68,7 +68,7 @@ services:
       - redis
       - celery_worker
 
-  # 6. Monitoring (Préparation pour la note maximale)
+  # 6. Monitoring avec Prometheus et Grafana
   prometheus:
     image: prom/prometheus:latest
     container_name: emploi_prometheus

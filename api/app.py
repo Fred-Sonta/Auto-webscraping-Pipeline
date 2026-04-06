@@ -1,37 +1,37 @@
-from flask import Flask
+from flask import Flask, Response
 from flask_restx import Api
 from flask_cors import CORS
+from prometheus_flask_exporter import PrometheusMetrics
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from api.routes import register_routes
-import logging
 from db.database import engine, Base
+import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def create_app():
-    app = Flask(__name__)
-    
-    # Autorise les requêtes provenant d'autres ports 
-    CORS(app)
+app = Flask(__name__)
+CORS(app)
 
-    # Configuration de l'interface Swagger 
-    api = Api(
-        app,
-        version='1.0',
-        title='Observatoire de l\'Emploi API',
-        description='API REST professionnelle pour l\'accès aux données du marché de l\'emploi ivoirien.',
-        doc='/docs', # L'URL magique pour voir l'interface !
-        default='Données',
-        default_label='Endpoints d\'accès aux données'
-    )
+# 1. On initialise l'API Swagger normalement
+api = Api(
+    app,
+    version='1.0',
+    title='Observatoire de l\'Emploi API',
+    description='API REST professionnelle pour l\'accès aux données WWR.',
+    doc='/docs'
+)
+Base.metadata.create_all(bind=engine)
+register_routes(api)
 
-    # Initialisation des routes
-    register_routes(api)
-    Base.metadata.create_all(bind=engine)
+# 2. On lance la collecte Prometheus, mais on lui interdit de créer sa route (path=None)
+metrics = PrometheusMetrics(app, path=None)
+metrics.info('app_info', 'API Observatoire Emploi', version='1.0')
 
-    return app
+# 3. On ajoute une route dédiée pour les métriques Prometheus
+@app.route('/metrics')
+def metrics_endpoint():
+    # generate_latest() récupère toutes les données collectées en arrière-plan
+    return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
 
 if __name__ == '__main__':
-    app = create_app()
-    # Le mode debug est actif pour le développement
     app.run(host='0.0.0.0', port=5000, debug=True)
-
