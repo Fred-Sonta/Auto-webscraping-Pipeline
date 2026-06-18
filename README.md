@@ -1,8 +1,3 @@
-# Observatoire du Marché de l'Emploi à Abidjan
-
-Projet de fin de module — Web Scraping | ENSEA AS Data Science
-
-## Niveau visé : OR (20/20)
 
 ## Description
 Pipeline complet de collecte, nettoyage, stockage et visualisation
