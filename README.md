@@ -6,8 +6,6 @@ A Python data engineering project that collects job listings from [We Work Remot
 
 The repository brings together an ingestion workflow, asynchronous execution, scheduled collection, and API instrumentation in a modular codebase.
 
-> **Status — Development prototype.** The current implementation targets We Work Remotely using Requests and BeautifulSoup. An earlier Emploi.ci browser experiment remains in `test_browser.py` but is not part of the active pipeline. Full Docker deployment is currently blocked by unresolved merge markers in the committed `Dockerfile`.
-
 ## Project scope
 
 The project explores how to turn public job listings into a structured dataset that downstream applications can query without scraping the source on every request.
